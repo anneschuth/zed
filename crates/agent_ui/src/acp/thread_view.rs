@@ -646,6 +646,9 @@ impl AcpThreadView {
                     cx,
                 );
             }
+            AcpThreadEvent::LoadError(load_error) => {
+                self.thread_state = ThreadState::LoadError(load_error.clone());
+            }
         }
         cx.notify();
     }

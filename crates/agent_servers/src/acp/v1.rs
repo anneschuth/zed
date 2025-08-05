@@ -11,7 +11,7 @@ use anyhow::{Context as _, Result};
 use gpui::{App, AppContext as _, AsyncApp, Entity, Task, WeakEntity};
 
 use crate::{AgentServerCommand, acp::UnsupportedVersion};
-use acp_thread::{AcpThread, AgentConnection, AuthRequired};
+use acp_thread::{AcpThread, AgentConnection, AuthRequired, LoadError};
 
 pub struct AcpConnection {
     server_name: &'static str,
@@ -19,7 +19,6 @@ pub struct AcpConnection {
     sessions: Rc<RefCell<HashMap<acp::SessionId, AcpSession>>>,
     auth_methods: Vec<acp::AuthMethod>,
     _io_task: Task<Result<()>>,
-    _child: smol::process::Child,
 }
 
 pub struct AcpSession {
@@ -63,6 +62,40 @@ impl AcpConnection {
 
         let io_task = cx.background_spawn(io_task);
 
+        let (load_error_tx, load_error_rx) = oneshot::channel();
+        cx.background_spawn(async move {
+            let exit_status = child.status().await;
+            match dbg!(exit_status) {
+                Ok(status) if status.success() => anyhow::Ok(()),
+                Ok(status) => {
+                    // FIXME check version (unsupported?)
+                    load_error_tx
+                        .send(LoadError::Exited(status.code().unwrap_or_default()))
+                        .ok();
+                    Ok(())
+                }
+                Err(e) => Err(e.into()),
+            }
+        })
+        .detach();
+
+        cx.spawn({
+            let sessions = sessions.clone();
+            async move |cx| {
+                if let Some(load_error) = load_error_rx.await.ok() {
+                    for session in sessions.borrow().values() {
+                        session
+                            .thread
+                            .update(cx, |thread, cx| {
+                                thread.emit_load_error(load_error.clone(), cx);
+                            })
+                            .ok();
+                    }
+                }
+            }
+        })
+        .detach();
+
         let response = connection
             .initialize(acp::InitializeRequest {
                 protocol_version: acp::VERSION,
@@ -84,7 +117,6 @@ impl AcpConnection {
             connection: connection.into(),
             server_name,
             sessions,
-            _child: child,
             _io_task: io_task,
         })
     }

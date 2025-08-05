@@ -581,6 +581,7 @@ pub enum AcpThreadEvent {
     ToolAuthorizationRequired,
     Stopped,
     Error,
+    LoadError(LoadError),
 }
 
 impl EventEmitter<AcpThreadEvent> for AcpThread {}
@@ -1228,6 +1229,10 @@ impl AcpThread {
 
     pub fn to_markdown(&self, cx: &App) -> String {
         self.entries.iter().map(|e| e.to_markdown(cx)).collect()
+    }
+
+    pub fn emit_load_error(&mut self, load_error: LoadError, cx: &mut Context<Self>) {
+        cx.emit(AcpThreadEvent::LoadError(load_error));
     }
 }
 
